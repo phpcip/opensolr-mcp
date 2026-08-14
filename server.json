@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
   "name": "com.opensolr/opensolr-mcp",
-  "description": "Managed Apache Solr search for agents: hybrid BM25+kNN retrieval, server-side GPU embeddings, document indexing, and grounded RAG answers",
+  "description": "Managed Apache Solr for agents: hybrid BM25+kNN search, server-side embeddings, RAG answers",
   "repository": {
     "url": "https://github.com/phpcip/opensolr-mcp",
     "source": "github"
