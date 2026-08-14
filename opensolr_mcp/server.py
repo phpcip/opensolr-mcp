@@ -128,11 +128,13 @@ def opensolr_search(
 
 
 @mcp.tool()
-def opensolr_ai_answer(index: str, query: str) -> str:
+def opensolr_ai_answer(index: str, query: str, filter_query: Optional[str] = None) -> str:
     """Ask a question and get a grounded RAG answer generated ONLY from the
-    content already indexed in the given Opensolr index (retrieval + LLM,
-    all server-side)."""
-    return _get_client().ai_summary(index, query)
+    content already indexed in the given Opensolr index. Retrieval is hybrid
+    (BM25 + semantic kNN) — the top hits become the LLM context, the same
+    pipeline as the hosted search UI. filter_query optionally narrows
+    retrieval with a raw Solr fq expression."""
+    return _get_client().ai_summary(index, query, filter_query=filter_query)
 
 
 @mcp.tool()

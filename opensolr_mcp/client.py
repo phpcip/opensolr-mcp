@@ -264,18 +264,94 @@ class OpensolrClient:
         resp.raise_for_status()
         return resp.json()
 
-    def ai_summary(self, index: str, query: str, **params: Any) -> str:
-        """RAG answer generated from the index's own content. Returns plain text."""
-        resp = self._http.post(
-            f"{AI_BASE}/ai_summary",
-            data={
-                **self._auth_params(),
-                "index_name": index,
-                "query": query,
-                "stream": "false",
-                **params,
-            },
+    def hybrid_search(
+        self,
+        index: str,
+        query: str,
+        rows: int = 5,
+        mode: str = "union",
+        alpha: float = 0.5,
+        fl: str = "*,score",
+        fq: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Hybrid (BM25 + kNN) search via the native ``{!hybrid}`` parser.
+
+        The query is embedded server-side; lexical and vector scores are
+        fused per document on the Solr side.
+        """
+        clean = query.replace("{", " ").replace("}", " ").replace('"', " ")
+        vector = self.embed(index, query, is_query=True)
+        compact = json.dumps(vector, separators=(",", ":"))
+        params: Dict[str, Any] = {
+            "q": (
+                f"{{!hybrid lexical=$lexicalRaw vector=$vectorQuery "
+                f"mode={mode} alpha={alpha} topN={max(rows, 10)}}}"
+            ),
+            "lexicalRaw": f'{{!edismax qf="title^100 text^1"}}{clean}',
+            "vectorQuery": f"{{!knn f=embeddings topK={max(rows, 10)}}}{compact}",
+            "rows": rows,
+            "fl": fl,
+        }
+        if fq:
+            params["fq"] = fq
+        return self.solr_select(index, params)
+
+    #: How much retrieved content is packed into the RAG context — mirrors
+    #: the search.opensolr.com UI (top 4 hybrid hits, 1500 words each).
+    RAG_TOP_N = 4
+    RAG_MAX_WORDS_PER_DOC = 1500
+
+    def _rag_context(self, index: str, query: str, fq: Optional[str] = None) -> str:
+        """Build the LLM context from the top hybrid search hits."""
+
+        def _flat(v: Any) -> str:
+            if isinstance(v, list):
+                v = " ".join(str(x) for x in v)
+            return str(v or "")
+
+        body = self.hybrid_search(
+            index, query, rows=self.RAG_TOP_N, fl="title,description,text", fq=fq
         )
+        parts: List[str] = []
+        for doc in body.get("response", {}).get("docs", []):
+            words = _flat(doc.get("text")).split()[: self.RAG_MAX_WORDS_PER_DOC]
+            parts.append(
+                _flat(doc.get("title")) + " - "
+                + _flat(doc.get("description")) + " - "
+                + " ".join(words) + " - "
+            )
+        return "".join(parts)
+
+    def ai_summary(self, index: str, query: str, filter_query: Optional[str] = None, **params: Any) -> str:
+        """Grounded RAG answer: hybrid retrieval over the index feeds the LLM.
+
+        Retrieval runs client-side via ``hybrid_search`` (same pipeline as the
+        hosted search UI: top hits' title/description/text become the LLM
+        context). If retrieval fails or returns nothing, the server falls
+        back to its own retrieval. Returns plain text.
+        """
+        data = {
+            **self._auth_params(),
+            "index_name": index,
+            "query": query,
+            "stream": "false",
+            **params,
+        }
+        if "context" not in data:
+            try:
+                context = self._rag_context(index, query, fq=filter_query)
+            except (OpensolrError, httpx.HTTPError):
+                context = ""
+            if context:
+                data["context"] = context
+                data.setdefault(
+                    "instruction",
+                    "Read and understand the full context below, and formulate "
+                    f"a clear, concise and factual answer to: '{query}'.\n"
+                    "Answer ONLY from the context. Use bold section headers "
+                    "where it helps.\n",
+                )
+        resp = self._http.post(f"{AI_BASE}/ai_summary", data=data)
         if resp.status_code >= 400:
             raise OpensolrError(f"ai_summary: HTTP {resp.status_code}: {resp.text[:200]}")
         # The stream is prefixed with flush-padding whitespace — strip it.

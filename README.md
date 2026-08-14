@@ -14,7 +14,7 @@ No embedding model to configure. No vector database to run. One API key.
 | Tool | What it does |
 |---|---|
 | `opensolr_search` | Hybrid (keyword + semantic) or pure semantic search, with Solr filters |
-| `opensolr_ai_answer` | Grounded RAG answer generated only from your indexed content |
+| `opensolr_ai_answer` | Grounded RAG answer: top hybrid hits become the LLM context — same pipeline as the hosted search UI |
 | `opensolr_add_documents` | Index plain text + metadata (embedded server-side) |
 | `opensolr_delete_documents` | Remove documents by id |
 | `opensolr_list_indexes` / `opensolr_index_info` | Inspect the account's indexes |
@@ -118,6 +118,8 @@ Every release is validated against **live Opensolr infrastructure** — no mocks
   with a purely semantic query against its contents.
 
 The tools are exercised live (search modes, ingestion with wait, status,
-deletes, RAG answers) before every release.
+deletes, RAG answers) before every release. RAG grounding is verified
+end-to-end: a question answerable only from the ingested PDF returns the
+correct answer sourced from the PDF's extracted text.
 
 MIT license.
