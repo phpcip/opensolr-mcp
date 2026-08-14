@@ -7,6 +7,8 @@ gives any AI agent **managed Apache Solr search** as tools: hybrid
 (BM25 + kNN) retrieval, server-side GPU embeddings, document indexing, and
 grounded RAG answers.
 
+**See it live (real news index, hybrid + AI answer):** https://search.opensolr.com/news__dense?q=how+am+I+supposed+to+save+money%3F
+
 No embedding model to configure. No vector database to run. One API key.
 
 ## Tools
