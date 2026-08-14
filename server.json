@@ -1,0 +1,36 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "name": "com.opensolr/opensolr-mcp",
+  "description": "Managed Apache Solr search for agents: hybrid BM25+kNN retrieval, server-side GPU embeddings, document indexing, and grounded RAG answers",
+  "repository": {
+    "url": "https://github.com/phpcip/opensolr-mcp",
+    "source": "github"
+  },
+  "websiteUrl": "https://opensolr.com/langchain",
+  "version": "0.1.1",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "opensolr-mcp",
+      "version": "0.1.1",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "OPENSOLR_EMAIL",
+          "description": "Opensolr account email (free account: https://opensolr.com/register)",
+          "isRequired": true,
+          "isSecret": false
+        },
+        {
+          "name": "OPENSOLR_API_KEY",
+          "description": "Opensolr API key (Account > API in the control panel)",
+          "isRequired": true,
+          "isSecret": true
+        }
+      ]
+    }
+  ]
+}

@@ -1,5 +1,7 @@
 # opensolr-mcp
 
+mcp-name: com.opensolr/opensolr-mcp
+
 MCP (Model Context Protocol) server for [Opensolr](https://opensolr.com) —
 gives any AI agent **managed Apache Solr search** as tools: hybrid
 (BM25 + kNN) retrieval, server-side GPU embeddings, document indexing, and
