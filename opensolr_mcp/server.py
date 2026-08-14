@@ -135,17 +135,23 @@ def opensolr_ai_answer(
     rag_docs: int = 3,
     rag_words: int = 1500,
     instruction: Optional[str] = None,
+    tuning: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Ask a question and get a grounded RAG answer generated ONLY from the
-    content already indexed in the given Opensolr index. Retrieval is hybrid
-    (BM25 + semantic kNN) — the top rag_docs hits (first rag_words words of
-    text each) become the LLM context, the same pipeline as the hosted
-    search UI. filter_query optionally narrows retrieval with a raw Solr fq
-    expression; instruction optionally replaces the default prompt (e.g.
-    "Answer in German", "Extract a list of people")."""
+    content already indexed in the given Opensolr index. Retrieval runs
+    through the platform's tuned hybrid pipeline (the index's saved Search
+    Tuning applies automatically) — the top rag_docs hits (first rag_words
+    words of text each) become the LLM context, the same pipeline as the
+    hosted search UI. filter_query optionally narrows retrieval with a raw
+    Solr fq expression; instruction optionally replaces the default prompt
+    (e.g. "Answer in German", "Extract a list of people"); tuning optionally
+    overrides retrieval knobs per call (fw_title, fw_description, fw_uri,
+    fw_text, lexical_weight, vector_weight, vector_topk, search_mode,
+    quality_boost, min_score, mm)."""
     return _get_client().ai_summary(
         index, query, filter_query=filter_query,
         rag_docs=rag_docs, rag_words=rag_words, instruction=instruction,
+        tuning=tuning,
     )
 
 
