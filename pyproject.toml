@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "opensolr-mcp"
+version = "0.1.0"
+description = "MCP server for Opensolr — managed Apache Solr with hybrid BM25+kNN search, server-side embeddings, and RAG answers as agent tools"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [{ name = "Opensolr", email = "support@opensolr.com" }]
+dependencies = [
+    "mcp>=1.2.0",
+    "httpx>=0.25.0",
+]
+keywords = ["mcp", "model-context-protocol", "opensolr", "solr", "hybrid-search", "rag", "agents", "vector"]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+]
+
+[project.urls]
+Homepage = "https://opensolr.com/langchain"
+Repository = "https://github.com/phpcip/opensolr-mcp"
+
+[project.scripts]
+opensolr-mcp = "opensolr_mcp.server:main"
+
+[tool.setuptools]
+packages = ["opensolr_mcp"]
