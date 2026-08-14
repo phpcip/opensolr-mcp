@@ -296,12 +296,19 @@ class OpensolrClient:
             params["fq"] = fq
         return self.solr_select(index, params)
 
-    #: How much retrieved content is packed into the RAG context — mirrors
-    #: the search.opensolr.com UI (top 4 hybrid hits, 1500 words each).
-    RAG_TOP_N = 4
-    RAG_MAX_WORDS_PER_DOC = 1500
+    #: RAG context defaults — how many hybrid hits feed the LLM, and how many
+    #: words of each hit's text are included. Both overridable per call.
+    RAG_DOCS = 3
+    RAG_WORDS = 1500
 
-    def _rag_context(self, index: str, query: str, fq: Optional[str] = None) -> str:
+    def _rag_context(
+        self,
+        index: str,
+        query: str,
+        fq: Optional[str] = None,
+        docs: Optional[int] = None,
+        words: Optional[int] = None,
+    ) -> str:
         """Build the LLM context from the top hybrid search hits."""
 
         def _flat(v: Any) -> str:
@@ -309,26 +316,39 @@ class OpensolrClient:
                 v = " ".join(str(x) for x in v)
             return str(v or "")
 
+        docs = docs or self.RAG_DOCS
+        words = words or self.RAG_WORDS
         body = self.hybrid_search(
-            index, query, rows=self.RAG_TOP_N, fl="title,description,text", fq=fq
+            index, query, rows=docs, fl="title,description,text", fq=fq
         )
         parts: List[str] = []
         for doc in body.get("response", {}).get("docs", []):
-            words = _flat(doc.get("text")).split()[: self.RAG_MAX_WORDS_PER_DOC]
+            text_words = _flat(doc.get("text")).split()[:words]
             parts.append(
                 _flat(doc.get("title")) + " - "
                 + _flat(doc.get("description")) + " - "
-                + " ".join(words) + " - "
+                + " ".join(text_words) + " - "
             )
         return "".join(parts)
 
-    def ai_summary(self, index: str, query: str, filter_query: Optional[str] = None, **params: Any) -> str:
+    def ai_summary(
+        self,
+        index: str,
+        query: str,
+        filter_query: Optional[str] = None,
+        rag_docs: Optional[int] = None,
+        rag_words: Optional[int] = None,
+        instruction: Optional[str] = None,
+        **params: Any,
+    ) -> str:
         """Grounded RAG answer: hybrid retrieval over the index feeds the LLM.
 
         Retrieval runs client-side via ``hybrid_search`` (same pipeline as the
-        hosted search UI: top hits' title/description/text become the LLM
-        context). If retrieval fails or returns nothing, the server falls
-        back to its own retrieval. Returns plain text.
+        hosted search UI): the top ``rag_docs`` hits' title/description/text
+        (first ``rag_words`` words each) become the LLM context. Pass
+        ``instruction`` to fully control the prompt (e.g. "Answer in German",
+        "Extract a list of people"). If retrieval fails or returns nothing,
+        the server falls back to its own retrieval. Returns plain text.
         """
         data = {
             **self._auth_params(),
@@ -337,9 +357,13 @@ class OpensolrClient:
             "stream": "false",
             **params,
         }
+        if instruction:
+            data["instruction"] = instruction
         if "context" not in data:
             try:
-                context = self._rag_context(index, query, fq=filter_query)
+                context = self._rag_context(
+                    index, query, fq=filter_query, docs=rag_docs, words=rag_words
+                )
             except (OpensolrError, httpx.HTTPError):
                 context = ""
             if context:
@@ -348,8 +372,10 @@ class OpensolrClient:
                     "instruction",
                     "Read and understand the full context below, and formulate "
                     f"a clear, concise and factual answer to: '{query}'.\n"
-                    "Answer ONLY from the context. Use bold section headers "
-                    "where it helps.\n",
+                    "Answer ONLY from the context. Format the answer in "
+                    "Markdown, use bold section headers where they help, and "
+                    "cite exact titles or names from the context when "
+                    "referring to them.\n",
                 )
         resp = self._http.post(f"{AI_BASE}/ai_summary", data=data)
         if resp.status_code >= 400:
