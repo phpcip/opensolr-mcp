@@ -1,0 +1,24 @@
+# Smithery configuration — https://smithery.ai
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    required:
+      - opensolrEmail
+      - opensolrApiKey
+    properties:
+      opensolrEmail:
+        type: string
+        description: Opensolr account email (free account at https://opensolr.com/register)
+      opensolrApiKey:
+        type: string
+        description: Opensolr API key (Account > API in the control panel)
+  commandFunction: |-
+    (config) => ({
+      command: 'uvx',
+      args: ['opensolr-mcp'],
+      env: {
+        OPENSOLR_EMAIL: config.opensolrEmail,
+        OPENSOLR_API_KEY: config.opensolrApiKey
+      }
+    })
