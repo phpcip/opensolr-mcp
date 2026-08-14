@@ -85,37 +85,41 @@ def opensolr_search(
     index: str,
     query: str,
     k: int = 5,
-    hybrid: bool = True,
+    search_mode: str = "hybrid",
     mode: str = "union",
     alpha: float = 0.5,
     filter_query: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Search an Opensolr index and return the k most relevant documents.
 
-    By default runs HYBRID search: BM25 keyword matching and semantic kNN
-    (server-side embeddings) fused per document. Set hybrid=false for pure
-    semantic search. mode is one of union, keywords_required,
-    meaning_required, intersection; alpha balances semantic (0) vs lexical (1).
+    search_mode: "hybrid" (default — BM25 + semantic kNN fused per document),
+    "semantic" (pure kNN), or "lexical" (pure keyword edismax — no embedding
+    call, zero AI quota, works on ANY index including non-vector ones).
+    For hybrid: mode is union / keywords_required / meaning_required /
+    intersection, alpha balances semantic (0) vs lexical (1).
     filter_query accepts a raw Solr fq expression, e.g. 'meta_category:"docs"'.
     """
     client = _get_client()
-    vector = client.embed(index, query, is_query=True)
-    compact = json.dumps(vector, separators=(",", ":"))
-    knn = f"{{!knn f=embeddings topK={max(k, 10)}}}{compact}"
-
+    clean = query.replace("{", " ").replace("}", " ").replace('"', " ")
     params: Dict[str, Any] = {"rows": k, "fl": "*,score"}
-    if hybrid:
-        if mode not in _HYBRID_MODES:
-            raise ValueError(f"mode must be one of {_HYBRID_MODES}")
-        clean = query.replace("{", " ").replace("}", " ").replace('"', " ")
-        params["q"] = (
-            f"{{!hybrid lexical=$lexicalRaw vector=$vectorQuery "
-            f"mode={mode} alpha={alpha} topN={max(k, 10)}}}"
-        )
-        params["lexicalRaw"] = f'{{!edismax qf="title^100 text^1"}}{clean}'
-        params["vectorQuery"] = knn
+
+    if search_mode == "lexical":
+        params["q"] = f'{{!edismax qf="title^100 description^20 text^1"}}{clean}'
     else:
-        params["q"] = knn
+        vector = client.embed(index, query, is_query=True)
+        compact = json.dumps(vector, separators=(",", ":"))
+        knn = f"{{!knn f=embeddings topK={max(k, 10)}}}{compact}"
+        if search_mode == "hybrid":
+            if mode not in _HYBRID_MODES:
+                raise ValueError(f"mode must be one of {_HYBRID_MODES}")
+            params["q"] = (
+                f"{{!hybrid lexical=$lexicalRaw vector=$vectorQuery "
+                f"mode={mode} alpha={alpha} topN={max(k, 10)}}}"
+            )
+            params["lexicalRaw"] = f'{{!edismax qf="title^100 text^1"}}{clean}'
+            params["vectorQuery"] = knn
+        else:
+            params["q"] = knn
     if filter_query:
         params["fq"] = filter_query
 
@@ -156,37 +160,87 @@ def opensolr_add_documents(
     texts: List[str],
     metadatas: Optional[List[Dict[str, Any]]] = None,
     ids: Optional[List[str]] = None,
-) -> List[str]:
-    """Index plain-text documents with optional metadata dicts. Embeddings are
-    computed server-side automatically. Returns the document ids."""
+    wait: bool = True,
+) -> Dict[str, Any]:
+    """Index plain-text documents via the Opensolr Data Ingestion API.
+
+    Ingestion is ASYNC: embeddings, sentiment, and all derived fields are
+    computed server-side and documents become searchable within about a
+    minute (progress is visible in the Opensolr Control Panel). With
+    wait=true (default) this blocks until the job completes. Metadata keys
+    become filterable meta_* fields; metadata "uri" (a real URL) is used as
+    the document identity — the Solr id is md5(uri). Returns job info and
+    the resulting Solr document ids.
+    """
+    import hashlib
+    from urllib.parse import quote
+
     client = _get_client()
     metadatas = metadatas or [{} for _ in texts]
     ids = ids or [str(uuid.uuid4()) for _ in texts]
     if not (len(texts) == len(metadatas) == len(ids)):
         raise ValueError("texts, metadatas and ids must have the same length")
 
-    vectors = client.batch_embed(index, texts)
     docs = []
-    for text, meta, doc_id, vector in zip(texts, metadatas, ids, vectors):
+    solr_ids = []
+    for text, meta, doc_id in zip(texts, metadatas, ids):
+        meta = dict(meta or {})
+        uri = meta.get("uri") or meta.get("url")
+        if not (isinstance(uri, str) and uri.startswith(("http://", "https://"))):
+            uri = f"https://ingest.opensolr.com/{index}/{quote(str(doc_id), safe='')}"
+        uri = uri.rstrip("/")
+        text = text or " "
         doc: Dict[str, Any] = {
-            "id": doc_id,
+            "uri": uri,
+            "title": str(meta.get("title") or text[:100] or uri)[:250],
+            "description": str(meta.get("description") or text[:200]),
             "text": text,
-            "embeddings": vector,
+            "meta_ext_id": str(doc_id),
             "meta_lc_json": json.dumps(meta, ensure_ascii=False),
-            "title": str(meta.get("title") or text[:100]),
         }
-        for key, value in (meta or {}).items():
-            if isinstance(value, (str, int, float, bool)):
+        if meta.get("rtf"):
+            doc["rtf"] = True
+        if meta.get("timestamp"):
+            doc["timestamp"] = meta["timestamp"]
+        for key, value in meta.items():
+            if isinstance(value, (str, int, float, bool)) and key not in ("rtf", "uri", "url"):
                 doc[f"meta_{_META_KEY_RE.sub('_', str(key).lower()).strip('_')}"] = str(value)
         docs.append(doc)
-    client.solr_update(index, docs)
-    return ids
+        solr_ids.append(hashlib.md5(uri.encode()).hexdigest())
+
+    results = []
+    for i in range(0, len(docs), 50):
+        results.append(client.ingest(index, docs[i : i + 50], wait=wait))
+    return {
+        "queued_jobs": [r.get("job_id") for r in results],
+        "doc_ids": solr_ids,
+        "note": "Ingestion is asynchronous; check opensolr_ingest_status or the Control Panel.",
+    }
 
 
 @mcp.tool()
-def opensolr_delete_documents(index: str, ids: List[str]) -> str:
-    """Delete documents from an index by their ids."""
-    _get_client().solr_update(index, {"delete": list(ids)})
+def opensolr_ingest_status(job_id: str) -> Dict[str, Any]:
+    """Status of a Data Ingestion job (state, processed/success/failed doc
+    counts). Also visible in the Opensolr Control Panel."""
+    return _get_client().ingest_status(job_id)
+
+
+@mcp.tool()
+def opensolr_delete_documents(
+    index: str,
+    ids: Optional[List[str]] = None,
+    query: Optional[str] = None,
+) -> str:
+    """Delete documents by ids (Solr ids or your original ids) or by a raw
+    Solr query, e.g. 'meta_category:"drafts"' or '+id:"abc123"'."""
+    client = _get_client()
+    if query:
+        client.solr_update(index, {"delete": {"query": query}})
+        return "deleted by query"
+    if not ids:
+        raise ValueError("Provide ids or query")
+    joined = " OR ".join('"' + str(i).replace('"', '') + '"' for i in ids)
+    client.solr_update(index, {"delete": {"query": f"id:({joined}) OR meta_ext_id:({joined})"}})
     return f"deleted {len(ids)} document(s)"
 
 
