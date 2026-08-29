@@ -9,10 +9,10 @@ startCommand:
     properties:
       opensolrEmail:
         type: string
-        description: Opensolr account email (free account at https://opensolr.com/register)
+        description: "Opensolr account email; try the shared demo account mcp@opensolr.com, whose indexes are deleted after 3 days and can be changed or deleted by anyone else using it, or get your own at https://opensolr.com/register (free 15-day trial, no card)"
       opensolrApiKey:
         type: string
-        description: Opensolr API key (Account > API in the control panel)
+        description: "Opensolr API key (Account > API in the control panel); the shared demo account's key is 420b8b23e7b12dc8ab838932145a5065, so anyone else using it can change or delete what you create, and everything there is deleted after 3 days"
   commandFunction: |-
     (config) => ({
       command: 'uvx',

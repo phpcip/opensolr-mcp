@@ -29,18 +29,34 @@ Get a free Opensolr account (15-day trial, no card) at
 [opensolr.com/register](https://opensolr.com/register) and copy your API key
 from **Account**.
 
-> **Trying it from a directory listing?** Some catalogues show this server with a
-> shared demo credential, so every tool works immediately without signing up —
-> create an index, push documents into it, search, ask. It is a genuinely open
-> demo account: **everyone browsing that page shares it**, anything you create
-> there is visible to them, they can change or delete it, and you can do the same
-> to theirs. Indexes on it are wiped after **3 days**.
->
-> That is fine for a five-minute look and useless for anything else. The moment
-> you want an index that is yours, is private, and stays put, get your own key —
-> [free trial, no card](https://opensolr.com/register), or see
-> [pricing](https://opensolr.com/pricing) — and put your own `OPENSOLR_EMAIL` and
-> `OPENSOLR_API_KEY` in the config below.
+### Try it without an account
+
+There is a public demo account. Point the package at it and everything in this
+README works immediately, with no signup:
+
+```bash
+export OPENSOLR_EMAIL=mcp@opensolr.com
+export OPENSOLR_API_KEY=420b8b23e7b12dc8ab838932145a5065
+```
+
+`mcp_demo_d1__dense` is already loaded with 300 news articles, so search, filtering
+and grounded answers work the moment you connect. You also get the full write path:
+create your own index on the account, ingest into it, query it, delete it.
+
+Know what you are working with:
+
+- **Anything you create there is deleted after 3 days.** Automatically, without warning
+  or export. That includes indexes you created and every document in them.
+- **The account is shared with everyone reading this.** Your index is visible to them,
+  they can change or delete it, and you can do the same to theirs. Never put anything
+  real, private or client-owned in it.
+- **The limits are per index, and deliberately small.** 200 MB of bandwidth and 50 MB
+  of disk per index. Bandwidth is the one you will hit first: it covers a demo, a
+  tutorial and a proof of concept, and it will not carry an application.
+
+When you want an index that is private, yours and still there next week, get your own
+key — [free 15-day trial, no card](https://opensolr.com/register) — and change the two
+variables above. Nothing else in your code changes.
 
 ### Claude Desktop / Claude Code
 

@@ -5,6 +5,13 @@ Credentials come from the environment:
     OPENSOLR_EMAIL    — Opensolr account email
     OPENSOLR_API_KEY  — Opensolr API key (Account > API in the control panel)
 
+To try it without an account, use the shared public demo credentials
+mcp@opensolr.com / 420b8b23e7b12dc8ab838932145a5065 — it comes with the index
+mcp_demo_d1__dense (300 news articles), anything created there is deleted after
+3 days, automatically, other people can change or delete what you create, and the
+limits are per index and small on purpose: 200 MB bandwidth, 50 MB disk. For a
+private index that persists: https://opensolr.com/register (free 15-day trial, no card).
+
 Run: ``opensolr-mcp`` (stdio transport — for Claude Desktop, Cursor, etc.)
 """
 
@@ -45,9 +52,15 @@ def _get_client() -> OpensolrClient:
         email = os.environ.get("OPENSOLR_EMAIL", "")
         api_key = os.environ.get("OPENSOLR_API_KEY", "")
         if not (email and api_key):
+            # A user who hits this is stuck inside their agent client with no way out,
+            # so hand them working demo credentials right here instead of a signup link.
             raise OpensolrError(
-                "Set OPENSOLR_EMAIL and OPENSOLR_API_KEY in the MCP server "
-                "environment (free account: https://opensolr.com/register)."
+                "Set OPENSOLR_EMAIL and OPENSOLR_API_KEY in the MCP server environment. "
+                "To try it now: OPENSOLR_EMAIL=mcp@opensolr.com "
+                "OPENSOLR_API_KEY=420b8b23e7b12dc8ab838932145a5065 — shared public demo "
+                "account with the index mcp_demo_d1__dense (300 news articles); anything "
+                "created there is deleted after 3 days, automatically. For a private index "
+                "that persists: https://opensolr.com/register (free 15-day trial, no card)."
             )
         _client = OpensolrClient(email, api_key)
     return _client
