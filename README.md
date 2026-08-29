@@ -30,11 +30,17 @@ Get a free Opensolr account (15-day trial, no card) at
 from **Account**.
 
 > **Trying it from a directory listing?** Some catalogues show this server with a
-> shared demo credential so the tools can be exercised without signing up. That
-> credential is read-only, pinned to one small public index of news articles, and
-> shared with everyone else browsing the same page — you cannot index your own
-> content with it, and the results you get are not yours. Swap in your own email
-> and API key from **Account > API** before you build anything on it.
+> shared demo credential, so every tool works immediately without signing up —
+> create an index, push documents into it, search, ask. It is a genuinely open
+> demo account: **everyone browsing that page shares it**, anything you create
+> there is visible to them, they can change or delete it, and you can do the same
+> to theirs. Indexes on it are wiped after **3 days**.
+>
+> That is fine for a five-minute look and useless for anything else. The moment
+> you want an index that is yours, is private, and stays put, get your own key —
+> [free trial, no card](https://opensolr.com/register), or see
+> [pricing](https://opensolr.com/pricing) — and put your own `OPENSOLR_EMAIL` and
+> `OPENSOLR_API_KEY` in the config below.
 
 ### Claude Desktop / Claude Code
 
