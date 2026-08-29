@@ -114,6 +114,12 @@ def opensolr_search(
     clean = query.replace("{", " ").replace("}", " ").replace('"', " ")
     params: Dict[str, Any] = {"rows": k, "fl": "*,score"}
 
+    # Validate before embedding. The check is local and free; the embedding is a billed GPU
+    # round-trip against the account's AI quota, so rejecting the caller's typo afterwards
+    # charged them for our own argument validation (2026-08-29).
+    if search_mode == "hybrid" and mode not in _HYBRID_MODES:
+        raise ValueError(f"mode must be one of {_HYBRID_MODES}")
+
     if search_mode == "lexical":
         params["q"] = f'{{!edismax qf="title^100 description^20 text^1"}}{clean}'
     else:
@@ -121,8 +127,6 @@ def opensolr_search(
         compact = json.dumps(vector, separators=(",", ":"))
         knn = f"{{!knn f=embeddings topK={max(k, 10)}}}{compact}"
         if search_mode == "hybrid":
-            if mode not in _HYBRID_MODES:
-                raise ValueError(f"mode must be one of {_HYBRID_MODES}")
             params["q"] = (
                 f"{{!hybrid lexical=$lexicalRaw vector=$vectorQuery "
                 f"mode={mode} alpha={alpha} topN={max(k, 10)}}}"
