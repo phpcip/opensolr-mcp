@@ -29,6 +29,13 @@ Get a free Opensolr account (15-day trial, no card) at
 [opensolr.com/register](https://opensolr.com/register) and copy your API key
 from **Account**.
 
+> **Trying it from a directory listing?** Some catalogues show this server with a
+> shared demo credential so the tools can be exercised without signing up. That
+> credential is read-only, pinned to one small public index of news articles, and
+> shared with everyone else browsing the same page — you cannot index your own
+> content with it, and the results you get are not yours. Swap in your own email
+> and API key from **Account > API** before you build anything on it.
+
 ### Claude Desktop / Claude Code
 
 ```json
