@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 
 from mcp.server import MCPServer
 
-from .client import OpensolrClient, OpensolrError, resolve_location
+from .client import OpensolrClient, OpensolrError, apply_fresh_bias, resolve_location
 
 mcp = MCPServer(
     "opensolr",
@@ -89,6 +89,7 @@ def opensolr_search(
     mode: str = "union",
     alpha: float = 0.5,
     filter_query: Optional[str] = None,
+    fresh_bias: bool = False,
 ) -> List[Dict[str, Any]]:
     """Search an Opensolr index and return the k most relevant documents.
 
@@ -98,6 +99,11 @@ def opensolr_search(
     For hybrid: mode is union / keywords_required / meaning_required /
     intersection, alpha balances semantic (0) vs lexical (1).
     filter_query accepts a raw Solr fq expression, e.g. 'meta_category:"docs"'.
+    fresh_bias biases the ranking toward recent documents by multiplying each
+    score by a recency curve on creation_date. It re-orders and never filters:
+    the hit count is unchanged, nothing old becomes unreachable, and a document
+    with no creation_date is simply left unboosted. Works in all three search
+    modes. Off by default — turn it on when newer should beat older on a tie.
     """
     client = _get_client()
     clean = query.replace("{", " ").replace("}", " ").replace('"', " ")
@@ -120,6 +126,11 @@ def opensolr_search(
             params["vectorQuery"] = knn
         else:
             params["q"] = knn
+    # Fresh Results Bias wraps whichever shape was built above — edismax, fused
+    # {!hybrid} or bare {!knn} — so the recency multiplier reaches every candidate,
+    # including the vector-only ones an edismax bf never sees.
+    if fresh_bias:
+        apply_fresh_bias(params)
     if filter_query:
         params["fq"] = filter_query
 
@@ -132,7 +143,9 @@ def opensolr_ai_answer(
     index: str,
     query: str,
     filter_query: Optional[str] = None,
-    rag_docs: int = 3,
+    # 4 documents is the platform's measured context size (OpensolrClient.RAG_DOCS);
+    # this used to pass 3, which quietly overrode the client default with a smaller one.
+    rag_docs: int = 4,
     rag_words: int = 1500,
     instruction: Optional[str] = None,
     tuning: Optional[Dict[str, Any]] = None,
@@ -145,9 +158,18 @@ def opensolr_ai_answer(
     hosted search UI. filter_query optionally narrows retrieval with a raw
     Solr fq expression; instruction optionally replaces the default prompt
     (e.g. "Answer in German", "Extract a list of people"); tuning optionally
-    overrides retrieval knobs per call (fw_title, fw_description, fw_uri,
-    fw_text, lexical_weight, vector_weight, vector_topk, search_mode,
-    quality_boost, min_score, mm)."""
+    overrides retrieval knobs per call. That list is the whole set, not a
+    sample — an abbreviated one reads as everything that is supported, and
+    freshness_boost was invisible to callers because of it: fw_title,
+    fw_description, fw_uri, fw_text, fw_text_t, lexical_weight,
+    vector_weight, vector_topk, search_mode (union / keywords_required /
+    meaning_required / intersection), quality_boost, min_score,
+    freshness_boost, fresh_bias, lexical_norm_k, mm (flexible / balanced /
+    strict or raw Solr mm syntax). freshness_boost and fresh_bias are different
+    knobs despite the names: the first is a hard window in DAYS that filters
+    older documents out, the second only re-orders, multiplying each score by a
+    recency curve on creation_date so recent documents win ties while nothing
+    becomes unreachable."""
     return _get_client().ai_summary(
         index, query, filter_query=filter_query,
         rag_docs=rag_docs, rag_words=rag_words, instruction=instruction,
