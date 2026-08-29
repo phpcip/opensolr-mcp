@@ -18,10 +18,15 @@ from typing import Any, Dict, List, Optional
 
 from mcp.server import MCPServer
 
+from . import __version__
 from .client import OpensolrClient, OpensolrError, apply_fresh_bias, resolve_location
 
 mcp = MCPServer(
     "opensolr",
+    # Without this the handshake reports serverInfo.version as an empty string, so every
+    # client and directory listing shows the server as version-less and cannot tell one
+    # release from another (seen in the Glama build log, 2026-08-29).
+    version=__version__,
     instructions=(
         "Managed Apache Solr search for the user's Opensolr account. "
         "Use opensolr_search for retrieval (hybrid keyword+semantic by default), "
