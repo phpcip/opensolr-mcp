@@ -90,6 +90,24 @@ Same shape — stdio transport, command `uvx opensolr-mcp` (or
 > — BM25 catches the exact word "refund", kNN catches "giving customers their
 > money back", and the scores fuse per document.
 
+## Search with a photo
+
+`opensolr_search_by_image` lets the agent search with a **picture** instead of a
+text query. Opensolr reads the image three ways — visual labels (what it
+depicts), OCR text (words printed on it), and any barcode / QR code — turns that
+into words, and runs the normal search. No image vector is stored.
+
+```
+opensolr_search_by_image(index="catalog__dense", image_path="/tmp/shelf.jpg",
+                         using="auto", k=5)
+# using: "auto" (engine's choice) | "meaning" (visual labels) |
+#        "text" (OCR only) | "code" (exact barcode/QR) | "all" (everything)
+# -> { "read": {text, mode, labels, codes}, "results": [...] }
+```
+
+`search_mode`, `mode`, `alpha`, `fresh_bias` and `filter_query` behave exactly as
+in `opensolr_search`.
+
 ## Notes
 
 - Vector-enabled indexes run on Opensolr's Solr 9.x environments — currently
