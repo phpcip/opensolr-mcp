@@ -18,6 +18,7 @@ Run: ``opensolr-mcp`` (stdio transport — for Claude Desktop, Cursor, etc.)
 from __future__ import annotations
 
 import json
+import base64
 import os
 import re
 import uuid
@@ -124,15 +125,25 @@ def opensolr_search(
     modes. Off by default — turn it on when newer should beat older on a tie.
     """
     client = _get_client()
+    return _do_search(client, index, query, k, search_mode, mode, alpha, filter_query, fresh_bias)
+
+
+def _do_search(
+    client: "OpensolrClient",
+    index: str,
+    query: str,
+    k: int,
+    search_mode: str,
+    mode: str,
+    alpha: float,
+    filter_query: Optional[str],
+    fresh_bias: bool,
+) -> List[Dict[str, Any]]:
+    """Shared search body used by opensolr_search and opensolr_search_by_image."""
     clean = query.replace("{", " ").replace("}", " ").replace('"', " ")
     params: Dict[str, Any] = {"rows": k, "fl": "*,score"}
-
-    # Validate before embedding. The check is local and free; the embedding is a billed GPU
-    # round-trip against the account's AI quota, so rejecting the caller's typo afterwards
-    # charged them for our own argument validation (2026-08-29).
     if search_mode == "hybrid" and mode not in _HYBRID_MODES:
         raise ValueError(f"mode must be one of {_HYBRID_MODES}")
-
     if search_mode == "lexical":
         params["q"] = f'{{!edismax qf="title^100 description^20 text^1"}}{clean}'
     else:
@@ -148,16 +159,76 @@ def opensolr_search(
             params["vectorQuery"] = knn
         else:
             params["q"] = knn
-    # Fresh Results Bias wraps whichever shape was built above — edismax, fused
-    # {!hybrid} or bare {!knn} — so the recency multiplier reaches every candidate,
-    # including the vector-only ones an edismax bf never sees.
     if fresh_bias:
         apply_fresh_bias(params)
     if filter_query:
         params["fq"] = filter_query
-
     body = client.solr_select(index, params)
     return [_doc_out(d) for d in body["response"]["docs"]]
+
+
+@mcp.tool()
+def opensolr_search_by_image(
+    index: str,
+    image_path: str,
+    k: int = 5,
+    using: str = "auto",
+    search_mode: str = "hybrid",
+    mode: str = "union",
+    alpha: float = 0.5,
+    filter_query: Optional[str] = None,
+    fresh_bias: bool = False,
+) -> Dict[str, Any]:
+    """Search an Opensolr index with a PHOTO instead of a text query.
+
+    The image at image_path is read three ways by the Opensolr image engine —
+    visual labels (what it depicts), OCR text (words printed on it), and any
+    barcode / QR code — and turned into a text query that runs through the normal
+    search. No image vector is stored; the picture simply becomes words.
+
+    using selects which reading drives the search:
+      "auto"    the engine's chosen text (OCR text when the picture is mostly text,
+                otherwise the visual labels) — the default,
+      "meaning" the visual labels (what the picture depicts),
+      "text"    only the OCR text read off the picture (empty if none),
+      "code"    the first barcode / QR code, matched as an exact keyword.
+
+    search_mode / mode / alpha / fresh_bias / filter_query behave exactly as in
+    opensolr_search. Returns {"read": {text, mode, labels, codes}, "results": [...]}
+    so the caller sees both what the picture was read as and the matching documents.
+    """
+    client = _get_client()
+    with open(image_path, "rb") as fh:
+        image_b64 = base64.b64encode(fh.read()).decode("ascii")
+    ans = client.image_to_text(index, image_b64, top_k=8)
+    labels = [l["label"] for l in (ans.get("labels") or []) if isinstance(l, dict) and l.get("label")]
+    codes = []
+    for c in (ans.get("codes") or []):
+        text = c.get("text") if isinstance(c, dict) else (c if isinstance(c, str) else None)
+        if text:
+            codes.append(text)
+    read = {"text": (ans.get("text") or "").strip(), "mode": ans.get("mode") or "clip", "labels": labels, "codes": codes}
+
+    if using == "meaning":
+        q = ", ".join(labels)
+    elif using == "text":
+        q = read["text"] if read["mode"] == "ocr" else ""
+    elif using == "code":
+        q = codes[0] if codes else ""
+        search_mode = "lexical"  # a code is an exact token
+    elif using == "all":
+        parts = list(labels)
+        if read["mode"] == "ocr" and read["text"]:
+            parts.append(read["text"])
+        parts.extend(codes)
+        q = ", ".join(p for p in parts if p)
+    elif using == "auto":
+        q = read["text"]
+    else:
+        raise ValueError("using must be one of 'auto', 'meaning', 'text', 'code', 'all'")
+
+    results = _do_search(client, index, q, k, search_mode, mode, alpha, filter_query, fresh_bias) if q else []
+    return {"read": read, "results": results}
 
 
 @mcp.tool()

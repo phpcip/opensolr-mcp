@@ -818,9 +818,10 @@ try:
     # ------------------------------------------------------------------ #
 
     EXPECTED_TOOLS = [
-        "opensolr_search", "opensolr_ai_answer", "opensolr_list_indexes",
-        "opensolr_index_info", "opensolr_add_documents", "opensolr_ingest_status",
-        "opensolr_delete_documents", "opensolr_create_index", "opensolr_vector_regions",
+        "opensolr_search", "opensolr_search_by_image", "opensolr_ai_answer",
+        "opensolr_list_indexes", "opensolr_index_info", "opensolr_add_documents",
+        "opensolr_ingest_status", "opensolr_delete_documents", "opensolr_create_index",
+        "opensolr_vector_regions",
     ]
 
     def _t_registry():
@@ -836,9 +837,9 @@ try:
                  f"{name} ships an unusable description: {tool.description!r}")
             tools[name] = tool.fn
         ST["tools"] = tools
-        return f"all 9 tools registered with callables and descriptions"
+        return f"all {len(EXPECTED_TOOLS)} tools registered with callables and descriptions"
 
-    check("all nine MCP tools are registered", _t_registry)
+    check("all ten MCP tools are registered", _t_registry)
 
     def _t_handshake_version():
         opts = S.mcp._lowlevel_server.create_initialization_options()
@@ -952,6 +953,39 @@ try:
         return f"{len(docs)} BM25 hits, top score {docs[0]['score']:.4f}, 0 embedding calls"
 
     check("opensolr_search(search_mode=lexical) uses no AI quota", _t_tool_search_lexical)
+
+    # A photo shipped alongside the suite; the image engine reads words off it. #
+    _IMG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_image.jpg")
+
+    def _t_tool_search_by_image():
+        # opensolr_search_by_image reads the picture into {text, mode, labels,
+        # codes} and runs the resulting words through the normal search, so the
+        # tool returns both the reading and the matching documents.
+        out = T["opensolr_search_by_image"](DEMO, _IMG, k=3)
+        need(isinstance(out, dict) and set(out) == {"read", "results"},
+             f"expected {{read, results}}, got {sorted(out) if isinstance(out, dict) else out!r}")
+        read = out["read"]
+        need(isinstance(read.get("text"), str) and read["text"].strip(),
+             f"the picture yielded no words: {read!r}")
+        need(read.get("mode") in ("clip", "ocr"), f"bad mode: {read.get('mode')!r}")
+        need(isinstance(read.get("labels"), list), "labels must be a list")
+        need(isinstance(read.get("codes"), list), "codes must be a list")
+        need(isinstance(out["results"], list), f"results must be a list, got {out['results']!r}")
+        return (f"read as {read['mode']}: {read['text'][:32]!r}, "
+                f"{len(read['labels'])} labels, {len(out['results'])} hits")
+
+    check("opensolr_search_by_image turns a photo into a search", _t_tool_search_by_image)
+
+    def _t_tool_search_by_image_bad_using():
+        try:
+            T["opensolr_search_by_image"](DEMO, _IMG, k=1, using="sideways")
+        except ValueError as exc:
+            need("using must be one of" in str(exc), f"unexpected message: {exc}")
+            return "ValueError names the valid 'using' selectors"
+        raise Expected("an unknown 'using' selector must be rejected")
+
+    check("opensolr_search_by_image rejects an unknown 'using' selector",
+          _t_tool_search_by_image_bad_using)
 
     def _t_tool_search_bad_mode():
         try:

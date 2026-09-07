@@ -16,6 +16,7 @@ No embedding model to configure. No vector database to run. One API key.
 | Tool | What it does |
 |---|---|
 | `opensolr_search` | Hybrid (keyword + semantic) or pure semantic search, with Solr filters |
+| `opensolr_search_by_image` | Search with a **photo** — Opensolr reads its visual labels, OCR text and any barcode/QR, then searches with those words (no image vector stored) |
 | `opensolr_ai_answer` | Grounded RAG answer: top hybrid hits become the LLM context — same pipeline as the hosted search UI |
 | `opensolr_add_documents` | Index plain text + metadata (embedded server-side) |
 | `opensolr_delete_documents` | Remove documents by id |

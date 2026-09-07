@@ -540,6 +540,15 @@ class OpensolrClient:
     def ai(self, method: str, **params: Any) -> Any:
         return self._request(AI_BASE, method, params)
 
+    def image_to_text(self, index: str, image_b64: str, top_k: int = 8) -> Dict[str, Any]:
+        """Turn an image into search words via the Opensolr image_to_text API.
+
+        The answer carries ``text`` (the words to search with), ``mode`` ("clip"/"ocr"),
+        ``labels`` (CLIP visual labels, present even in OCR mode), and ``codes``
+        (barcodes / QR codes). No image vector is stored: the picture becomes words.
+        """
+        return self.ai("image_to_text", index_name=index, image=image_b64, top_k=top_k)
+
     # ------------------------------------------------------------------ #
     # management                                                         #
     # ------------------------------------------------------------------ #
