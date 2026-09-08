@@ -10,7 +10,7 @@ mcp@opensolr.com / 420b8b23e7b12dc8ab838932145a5065 — it comes with the index
 mcp_demo_d1__dense (300 news articles), anything created there is deleted after
 3 days, automatically, other people can change or delete what you create, and the
 limits are per index and small on purpose: 200 MB bandwidth, 50 MB disk. For a
-private index that persists: https://opensolr.com/register (free 15-day trial, no card).
+private index that persists: https://opensolr.com/register (free forever, no card).
 
 Run: ``opensolr-mcp`` (stdio transport — for Claude Desktop, Cursor, etc.)
 """
@@ -61,7 +61,7 @@ def _get_client() -> OpensolrClient:
                 "OPENSOLR_API_KEY=420b8b23e7b12dc8ab838932145a5065 — shared public demo "
                 "account with the index mcp_demo_d1__dense (300 news articles); anything "
                 "created there is deleted after 3 days, automatically. For a private index "
-                "that persists: https://opensolr.com/register (free 15-day trial, no card)."
+                "that persists: https://opensolr.com/register (free forever, no card)."
             )
         _client = OpensolrClient(email, api_key)
     return _client
