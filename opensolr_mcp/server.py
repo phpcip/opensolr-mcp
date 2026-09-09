@@ -27,7 +27,14 @@ from typing import Any, Dict, List, Optional
 from mcp.server import MCPServer
 
 from . import __version__
-from .client import OpensolrClient, OpensolrError, apply_fresh_bias, resolve_location
+from .client import (
+    OpensolrClient,
+    OpensolrError,
+    apply_fresh_bias,
+    apply_search_operators,
+    parse_operators,
+    resolve_location,
+)
 
 mcp = MCPServer(
     "opensolr",
@@ -140,29 +147,58 @@ def _do_search(
     fresh_bias: bool,
 ) -> List[Dict[str, Any]]:
     """Shared search body used by opensolr_search and opensolr_search_by_image."""
-    clean = query.replace("{", " ").replace("}", " ").replace('"', " ")
     params: Dict[str, Any] = {"rows": k, "fl": "*,score"}
+    # Search operators (+word, -word, +"phrase", -"phrase") come out of the text once, for
+    # every mode below. See parse_operators() for why they cannot stay inside the query on
+    # any path that involves a vector — an agent that types "-Ruben" currently gets MORE
+    # Ruben, not less, because the minus sign is just another token to the embedder.
+    ops = parse_operators(query)
+    # Nothing left once the operators are removed ("-Ruben" alone): the operators ARE the
+    # query. Hand the whole string to edismax, which understands them natively, and emit no
+    # filters.
+    ops_only = ops["has_ops"] and len(ops["base"]) < 2
+    lexical_text = query if (not ops["has_ops"] or ops_only) else ops["base"]
+
     if search_mode == "hybrid" and mode not in _HYBRID_MODES:
         raise ValueError(f"mode must be one of {_HYBRID_MODES}")
-    if search_mode == "lexical":
-        params["q"] = f'{{!edismax qf="title^100 description^20 text^1"}}{clean}'
+    if search_mode == "lexical" or ops_only:
+        # Bound by reference (2026-09-09) instead of inlined: inlining meant a '}' in the
+        # caller's text closed the local-param block, which is why braces AND quotes were
+        # stripped first — and stripping the quotes silently broke every phrase query.
+        params["uq"] = lexical_text
+        params["q"] = '{!edismax qf="title^100 description^20 text^1" v=$uq}'
     else:
-        vector = client.embed(index, query, is_query=True)
+        # The embedder must never see an operator.
+        vector = client.embed(
+            index, ops["base"] if ops["has_ops"] else query, is_query=True
+        )
         compact = json.dumps(vector, separators=(",", ":"))
         knn = f"{{!knn f=embeddings topK={max(k, 10)}}}{compact}"
         if search_mode == "hybrid":
+            params["uq"] = lexical_text
             params["q"] = (
                 f"{{!hybrid lexical=$lexicalRaw vector=$vectorQuery "
                 f"mode={mode} alpha={alpha} topN={max(k, 10)}}}"
             )
-            params["lexicalRaw"] = f'{{!edismax qf="title^100 text^1"}}{clean}'
+            params["lexicalRaw"] = '{!edismax qf="title^100 text^1" v=$uq}'
             params["vectorQuery"] = knn
         else:
             params["q"] = knn
+        # Operators become filters on both vector-bearing shapes. On the pure-kNN shape this
+        # is the only thing that can honour them at all — that query has no edismax in it.
+        apply_search_operators(params, ops)
     if fresh_bias:
         apply_fresh_bias(params)
     if filter_query:
-        params["fq"] = filter_query
+        # Append: the operator filters and the Fresh Results Bias date clause are already in
+        # params by now, and a plain assignment would drop both.
+        existing = params.get("fq")
+        if existing is None:
+            params["fq"] = filter_query
+        elif isinstance(existing, list):
+            params["fq"] = existing + [filter_query]
+        else:
+            params["fq"] = [existing, filter_query]
     body = client.solr_select(index, params)
     return [_doc_out(d) for d in body["response"]["docs"]]
 
