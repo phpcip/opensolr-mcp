@@ -109,9 +109,12 @@ from opensolr_mcp.client import (                                    # noqa: E40
     FRESH_BIAS_FUNCTION,
     OpensolrClient,
     OpensolrError,
+    SEARCH_OPERATOR_FIELDS,
     apply_fresh_bias,
+    apply_search_operators,
     build_context,
     build_instruction,
+    parse_operators,
     resolve_location,
 )
 
@@ -266,6 +269,48 @@ try:
         return "q → {!boost b=$freshBias v=$freshBiasInner}, inner query preserved"
 
     check("apply_fresh_bias wraps the query without inlining it", _t_fresh_bias_wrapper)
+
+    def _t_parse_operators():
+        cases = {
+            "did juventus win that match? -Ruben":
+                ("did juventus win that match?", [], ["Ruben"]),
+            '+laptop +"13 inch" -refurbished':
+                ("", ["laptop", '"13 inch"'], ["refurbished"]),
+            'laptop -"open box" gaming': ("laptop gaming", [], ['"open box"']),
+            # a '-' mid-token is part of the word, not an operator
+            "e-mail covid-19 1+1 formula": ("e-mail covid-19 1+1 formula", [], []),
+            # a '-' INSIDE a quoted phrase belongs to the phrase
+            '"foo -bar" baz': ('"foo -bar" baz', [], []),
+            # a lone sign, or an empty operand, is plain text
+            'cafea + - fara +"" zahar': ('cafea + - fara +"" zahar', [], []),
+        }
+        for raw, (base, req, exc) in cases.items():
+            got = parse_operators(raw)
+            need(got["base"] == base, f"{raw!r}: base {got['base']!r} != {base!r}")
+            need(got["required"] == req, f"{raw!r}: required {got['required']!r} != {req!r}")
+            need(got["excluded"] == exc, f"{raw!r}: excluded {got['excluded']!r} != {exc!r}")
+            need(got["has_ops"] == bool(req or exc), f"{raw!r}: has_ops wrong")
+        return f"{len(cases)} queries split exactly, hyphenated words and quoted '-' left alone"
+
+    check("parse_operators splits +/- operators and leaves ordinary text alone",
+          _t_parse_operators)
+
+    def _t_apply_search_operators():
+        params = {"q": "{!hybrid}", "fq": ["meta_kind:news"]}
+        out = apply_search_operators(params, parse_operators('news +"press release" -rumour'))
+        need(out is params, "must mutate and return the same dict")
+        need(params["reqQ0"] == '"press release"', f"required operand: {params.get('reqQ0')!r}")
+        need(params["negQ0"] == "rumour", f"excluded operand: {params.get('negQ0')!r}")
+        want_req = '{!edismax qf="%s" mm="100%%" v=$reqQ0}' % SEARCH_OPERATOR_FIELDS
+        want_neg = '-{!edismax qf="%s" mm="100%%" v=$negQ0}' % SEARCH_OPERATOR_FIELDS
+        need(want_req in params["fq"], f"missing required filter: {params['fq']!r}")
+        need(want_neg in params["fq"], f"missing excluded filter: {params['fq']!r}")
+        need("meta_kind:news" in params["fq"], "a pre-existing fq must survive")
+        need(params["q"] == "{!hybrid}", "q must be untouched")
+        return "operands bound by reference, both filters added, existing fq kept"
+
+    check("apply_search_operators emits fq filters and keeps existing ones",
+          _t_apply_search_operators)
 
     def _t_resolve_location():
         need(resolve_location("us") == "CHICAGO-96", "us alias")
@@ -916,6 +961,83 @@ try:
 
     check("opensolr_search(search_mode=hybrid) returns ranked, shaped documents",
           _t_tool_search_hybrid)
+
+    OPS_Q = "green investment pledge at the climate summit"
+
+    def _ops_fixture():
+        """Pick a real word and adjacent word pair out of the top hybrid hit.
+
+        The demo corpus is not ours to hardcode, so the term to exclude comes from the corpus
+        itself. Excluding it MUST drop that document; requiring it must keep it.
+        """
+        if "ops_fixture" in ST:
+            return ST["ops_fixture"]
+        docs = T["opensolr_search"](DEMO, OPS_Q, k=1)
+        need(docs, "baseline hybrid search returned nothing to build a fixture from")
+        body = docs[0].get("text") or ""
+        words = re.findall(r"[A-Za-z]{6,}", body)
+        pair = re.search(r"([A-Za-z]{5,})\s+([A-Za-z]{5,})", body)
+        need(words and pair, f"top document has too little text: {body[:80]!r}")
+        ST["ops_fixture"] = {"id": docs[0]["id"], "word": words[0],
+                             "phrase": f"{pair.group(1)} {pair.group(2)}"}
+        return ST["ops_fixture"]
+
+    def _t_ops_exclude_word():
+        fx = _ops_fixture()
+        ids = [d["id"] for d in T["opensolr_search"](DEMO, f"{OPS_Q} -{fx['word']}", k=10)]
+        need(fx["id"] not in ids,
+             f"-{fx['word']} did not remove the document containing it ({len(ids)} results)")
+        return f"-{fx['word']} removed its document from {len(ids)} hybrid results"
+
+    check("-word excludes in hybrid mode, where the vector leg used to smuggle it back",
+          _t_ops_exclude_word)
+
+    def _t_ops_require_word():
+        fx = _ops_fixture()
+        ids = [d["id"] for d in T["opensolr_search"](DEMO, f"{OPS_Q} +{fx['word']}", k=20)]
+        need(ids, f"+{fx['word']} returned nothing at all")
+        need(fx["id"] in ids, f"+{fx['word']} dropped the document that does contain it")
+        return f"+{fx['word']} kept its document, {len(ids)} results"
+
+    check("+word is genuinely required in hybrid mode", _t_ops_require_word)
+
+    def _t_ops_exclude_phrase():
+        fx = _ops_fixture()
+        ids = [d["id"] for d in T["opensolr_search"](DEMO, f'{OPS_Q} -"{fx["phrase"]}"', k=10)]
+        need(fx["id"] not in ids,
+             f'-"{fx["phrase"]}" did not remove the document containing that exact phrase')
+        return f'-"{fx["phrase"]}" removed its document from {len(ids)} results'
+
+    check('-"phrase" excludes an exact phrase in hybrid mode', _t_ops_exclude_phrase)
+
+    def _t_ops_require_phrase():
+        fx = _ops_fixture()
+        ids = [d["id"] for d in T["opensolr_search"](DEMO, f'{OPS_Q} +"{fx["phrase"]}"', k=20)]
+        need(ids, f'+"{fx["phrase"]}" returned nothing at all')
+        need(fx["id"] in ids, f'+"{fx["phrase"]}" dropped the document containing that phrase')
+        return f'+"{fx["phrase"]}" kept its document, {len(ids)} results'
+
+    check('+"phrase" requires an exact phrase in hybrid mode', _t_ops_require_phrase)
+
+    def _t_ops_only_query():
+        fx = _ops_fixture()
+        ids = [d["id"] for d in T["opensolr_search"](DEMO, f"-{fx['word']}", k=5)]
+        need(ids, "a query made of nothing but an exclusion must still return documents")
+        need(fx["id"] not in ids, "the excluded document came back on the operators-only path")
+        return (f"'-{fx['word']}' alone falls back to keyword search and still excludes, "
+                f"{len(ids)} results")
+
+    check("a query that is nothing but operators still works and still excludes",
+          _t_ops_only_query)
+
+    def _t_ops_are_not_syntax():
+        # The operand is bound by reference, so Solr local params inside it stay text.
+        docs = T["opensolr_search"](DEMO, OPS_Q + ' -{!join fromIndex=mcp_demo_d1__dense}x', k=3)
+        need(isinstance(docs, list), f"expected a list, got {type(docs).__name__}")
+        return f"a '{{!join}}' operand stayed literal text, {len(docs)} normal results"
+
+    check("an operand containing Solr local params is treated as text, not syntax",
+          _t_ops_are_not_syntax)
 
     def _t_tool_search_semantic():
         docs = T["opensolr_search"](DEMO, "money promised to fight global warming",
