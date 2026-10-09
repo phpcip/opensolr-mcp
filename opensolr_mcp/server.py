@@ -609,8 +609,9 @@ def opensolr_delete_documents(
 
 @mcp.tool()
 def opensolr_create_index(index: str, location: str = "us") -> Dict[str, Any]:
-    """Create a new vector-enabled Opensolr index. location: us, de, fi, or
-    any environment id from opensolr_vector_regions. Additional dedicated
+    """Create a new vector-enabled Opensolr index in a vector region. location:
+    an environment id from opensolr_vector_regions, or a short name matched
+    against that live list by environment id or country (e.g. "us", "de"). Additional dedicated
     regions can be deployed on request (support@opensolr.com)."""
     return _get_client().create_index(index, resolve_location(location))
 
@@ -618,7 +619,8 @@ def opensolr_create_index(index: str, location: str = "us") -> Dict[str, Any]:
 @mcp.tool()
 def opensolr_vector_regions() -> List[Dict[str, str]]:
     """List the vector-enabled Opensolr environments currently available
-    (Solr 9.x with dense vectors and the hybrid query parser)."""
+    (the servers with the Opensolr web crawler that are up, any Solr version:
+    dense vectors, the hybrid query parser and Data Ingestion)."""
     return _get_client().vector_regions()
 
 
