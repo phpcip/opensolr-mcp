@@ -37,8 +37,8 @@ from **Account**.
 
 ### Try it without an account
 
-There is a public demo account. Point the package at it and search, ingestion and
-answers work immediately, with no signup:
+There is a public demo account. Point the package at it and everything in this
+README works immediately, with no signup:
 
 ```bash
 export OPENSOLR_EMAIL=mcp@opensolr.com
@@ -50,9 +50,6 @@ and grounded answers work the moment you connect. You also get the write path:
 create your own index on the account, ingest into it and query it. Deletion is not
 available on this shared key: no index here can be deleted or reconfigured by hand.
 Whatever you create is removed automatically after 3 days.
-Reading files and pictures (`opensolr_index_files`, `opensolr_extract_text`,
-`opensolr_describe_image`, `opensolr_search_by_image`) needs your own key: the shared
-demo key does not include them.
 
 Know what you are working with:
 
