@@ -866,7 +866,9 @@ try:
         "opensolr_search", "opensolr_search_by_image", "opensolr_ai_answer",
         "opensolr_list_indexes", "opensolr_index_info", "opensolr_add_documents",
         "opensolr_ingest_status", "opensolr_delete_documents", "opensolr_create_index",
-        "opensolr_vector_regions",
+        "opensolr_vector_regions", "opensolr_read_document", "opensolr_index_files",
+        "opensolr_extract_text", "opensolr_describe_image", "opensolr_check_schema",
+        "opensolr_apply_schema",
     ]
 
     def _t_registry():
@@ -884,7 +886,7 @@ try:
         ST["tools"] = tools
         return f"all {len(EXPECTED_TOOLS)} tools registered with callables and descriptions"
 
-    check("all ten MCP tools are registered", _t_registry)
+    check("all MCP tools are registered", _t_registry)
 
     def _t_handshake_version():
         opts = S.mcp._lowlevel_server.create_initialization_options()

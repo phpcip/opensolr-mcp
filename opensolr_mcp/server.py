@@ -54,8 +54,10 @@ mcp = MCPServer(
         "RAG answer, opensolr_index_files to index local files and folders (PDFs page by "
         "page, scans through OCR), opensolr_extract_text to read local files without "
         "indexing them, opensolr_describe_image for what a picture shows and the text on "
-        "it, and the document tools to index or remove content. Embedding happens "
-        "server-side — tools accept plain text, never vectors."
+        "it, and the document tools to index or remove content. Every tool checks once per "
+        "index that it can do what is asked and says exactly why not; opensolr_check_schema "
+        "shows the details, opensolr_apply_schema installs the Opensolr vector schema. "
+        "Embedding happens server-side — tools accept plain text, never vectors."
     ),
 )
 
@@ -106,14 +108,18 @@ def _doc_out(solr_doc: Dict[str, Any], expanded: Optional[Dict[str, Any]] = None
     text = _flat(solr_doc.get("text", "")) or ""
     if isinstance(text, list):
         text = " ".join(str(t) for t in text)
-    return {
+    out = {
         "id": str(_flat(solr_doc.get("id", ""))),
         "title": str(_flat(solr_doc.get("title", "")) or "")[:200],
         "text": str(text)[:2000],
         "score": float(_flat(solr_doc.get("score", 0.0)) or 0.0),
         "metadata": metadata,
-        **page_info(solr_doc, expanded),
     }
+    # A page of a PDF also says where it lives; any other document keeps exactly this shape
+    where = page_info(solr_doc, expanded)
+    if where.get("page"):
+        out.update(where)
+    return out
 
 
 @mcp.tool()
@@ -147,9 +153,9 @@ def opensolr_search(
     only documents dated in that period (creation_date) — use them when the
     question names a period.
     A PDF indexed page by page is one result per PDF (group_pages, on by default):
-    its best page, with "page", "page_url" (opens the PDF at that page),
+    its best page, with "uri", "page", "page_url" (opens the PDF at that page),
     "document_id" (for opensolr_read_document) and "more_pages", its other
-    matching pages. Every result has its "uri".
+    matching pages.
     """
     client = _get_client()
     return _do_search(client, index, query, k, search_mode, mode, alpha, filter_query, fresh_bias,
@@ -194,6 +200,8 @@ def _do_search(
         params["uq"] = lexical_text
         params["q"] = '{!edismax qf="title^100 description^20 text^1" v=$uq}'
     else:
+        # An index without the vector fields says so before an embedding is paid for
+        client.require_capability(index, "vector_search")
         # The embedder must never see an operator.
         vector = client.embed(
             index, ops["base"] if ops["has_ops"] else query, is_query=True
@@ -460,6 +468,34 @@ def opensolr_describe_image(index: str, image_path: str) -> Dict[str, Any]:
     with open(os.path.expanduser(image_path), "rb") as fh:
         image_b64 = base64.b64encode(fh.read()).decode("ascii")
     return _get_client().describe_image(index, image_b64)
+
+
+@mcp.tool()
+def opensolr_check_schema(index: str) -> Dict[str, Any]:
+    """Whether an index is ready for every Opensolr tool, and exactly why not.
+
+    Answers "ready", "capabilities" (ingestion, vector_search, pdf_pages,
+    keyword_search), the server and its Solr version, whether the server is in a
+    vector region, the fields and types that are missing or different from the
+    Opensolr vector schema, "problems" (sentences) and "fix": "apply_schema" (run
+    opensolr_apply_schema), "new_index" (create one with opensolr_create_index in
+    a region of opensolr_vector_regions) or "none". The other tools run this check
+    once per index on their own; call it to see the details.
+    """
+    return _get_client().check_schema(index)
+
+
+@mcp.tool()
+def opensolr_apply_schema(index: str, force: bool = False) -> Dict[str, Any]:
+    """Install the Opensolr vector schema on an index of a vector region, so Data
+    Ingestion, vector and hybrid search and PDF pages all work on it.
+
+    It replaces the index configuration. An index that already holds documents
+    needs force=true: those documents keep the fields they were written with and
+    must be sent again. An index outside the vector regions cannot take it (the
+    answer says where to create one). Returns the new check.
+    """
+    return _get_client().apply_schema(index, force=force)
 
 
 @mcp.tool()
