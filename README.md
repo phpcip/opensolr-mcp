@@ -4,8 +4,9 @@ mcp-name: com.opensolr/opensolr-mcp
 
 MCP (Model Context Protocol) server for [Opensolr](https://opensolr.com) —
 gives any AI agent **managed Apache Solr search** as tools: hybrid
-(BM25 + kNN) retrieval, server-side GPU embeddings, document indexing, and
-grounded RAG answers.
+(BM25 + kNN) retrieval, server-side GPU embeddings, document indexing (local
+files and folders too, PDFs page by page, scans through OCR), and grounded RAG
+answers.
 
 **See it live (real news index, hybrid + AI answer):** https://search.opensolr.com/news__dense?q=how+am+I+supposed+to+save+money%3F
 
@@ -15,9 +16,13 @@ No embedding model to configure. No vector database to run. One API key.
 
 | Tool | What it does |
 |---|---|
-| `opensolr_search` | Hybrid (keyword + semantic) or pure semantic search, with Solr filters |
+| `opensolr_search` | Hybrid (keyword + semantic) or pure semantic search, with Solr filters and a date range; a PDF comes back as its best page, with a link that opens it at that page |
 | `opensolr_search_by_image` | Search with a **photo** — Opensolr reads its visual labels, OCR text and any barcode/QR, then searches with those words (no image vector stored) |
+| `opensolr_read_document` | Read one result in full — a PDF page by page, any other document as one text |
 | `opensolr_ai_answer` | Grounded RAG answer: top hybrid hits become the LLM context — same pipeline as the hosted search UI |
+| `opensolr_index_files` | Index a local file or a whole folder: PDFs one document per page, Word / RTF / OpenDocument / text / HTML, scans and pictures through OCR |
+| `opensolr_extract_text` | Read local files without indexing them: text, OCR of their pictures, a PDF page by page |
+| `opensolr_describe_image` | What a picture shows (a sentence), the text printed on it, its labels and barcodes |
 | `opensolr_add_documents` | Index plain text + metadata (embedded server-side) |
 | `opensolr_delete_documents` | Remove documents by id |
 | `opensolr_list_indexes` / `opensolr_index_info` | Inspect the account's indexes |
@@ -32,8 +37,8 @@ from **Account**.
 
 ### Try it without an account
 
-There is a public demo account. Point the package at it and everything in this
-README works immediately, with no signup:
+There is a public demo account. Point the package at it and search, ingestion and
+answers work immediately, with no signup:
 
 ```bash
 export OPENSOLR_EMAIL=mcp@opensolr.com
@@ -43,6 +48,9 @@ export OPENSOLR_API_KEY=420b8b23e7b12dc8ab838932145a5065
 `mcp_demo_d1__dense` is already loaded with 300 news articles, so search, filtering
 and grounded answers work the moment you connect. You also get the full write path:
 create your own index on the account, ingest into it, query it, delete it.
+Reading files and pictures (`opensolr_index_files`, `opensolr_extract_text`,
+`opensolr_describe_image`, `opensolr_search_by_image`) needs your own key: the shared
+demo key does not include them.
 
 Know what you are working with:
 
@@ -105,8 +113,65 @@ opensolr_search_by_image(index="catalog__dense", image_path="/tmp/shelf.jpg",
 # -> { "read": {text, mode, labels, codes}, "results": [...] }
 ```
 
-`search_mode`, `mode`, `alpha`, `fresh_bias` and `filter_query` behave exactly as
-in `opensolr_search`.
+`search_mode`, `mode`, `alpha`, `fresh_bias`, `filter_query`, `date_from`, `date_to`
+and `group_pages` behave exactly as in `opensolr_search`.
+
+## Local files and folders: PDFs page by page, scans through OCR
+
+`opensolr_index_files` indexes a file or a whole folder from the machine the server
+runs on. Each file is read on Opensolr's servers — its text, the text in its
+pictures (OCR, more than 100 languages), a short description of the pictures that
+have no text — and a **PDF is indexed one document per page**, so a search lands on
+the page that answers it instead of a 200-page file that mentions it somewhere.
+Word, RTF, OpenDocument, text, HTML and picture files (scans, photos of documents)
+are one document each.
+
+```
+opensolr_index_files(index="contracts__dense", path="~/Documents/contracts",
+                     pattern="*.pdf", metadata={"team": "legal"})
+# -> {"documents": [{path, source, uri, id}], "pending": [], "failed": [], "jobs": [...]}
+```
+
+- The bytes travel once: a file the account already sent (same content) is not
+  uploaded again, and sending the same files again replaces their documents.
+- Each document's `uri` is `https://ingest.opensolr.com/<index>/<source>`, where
+  `source` is the file's path from the folder you sent (also in `meta_source`); its
+  date is the file's modification time, so date ranges work on local files too.
+- Big files are read in the background: whatever is still being read after
+  `wait_seconds` comes back under `pending`; call the tool again with the same path
+  to index those (nothing is sent twice).
+- Pictures read by OCR count 0.5 of an AI request each; a file read before is free.
+
+`opensolr_extract_text` does the same reading without indexing anything — the text of
+each file, a PDF as its pages (`page`, `text`, `is_ocr`, `lang`) — for an agent that
+wants to read a contract, a scanned invoice or a folder of reports itself.
+
+`opensolr_describe_image` answers what a picture shows and what is written on it:
+`caption` (a sentence), `text` (OCR), `labels` and barcode / QR `codes`.
+
+## PDF pages in search results
+
+On an index where PDFs are stored page by page (files indexed above, PDFs sent to
+Data Ingestion with `rtf`, PDFs found by the Web Crawler), `opensolr_search` returns
+each PDF **once**, as its best page:
+
+```
+{"title": "Master services agreement", "page": 14,
+ "page_url": "https://example.com/msa.pdf#page=14",   # opens the PDF at that page
+ "document_id": "9f2c...",                            # for opensolr_read_document
+ "more_pages": [{"page": 3, "page_url": "...#page=3"}, ...],  # its other matching pages
+ "matching_pages": 4, "uri": "https://example.com/msa.pdf", ...}
+```
+
+`group_pages=false` returns the pages as separate results. `opensolr_read_document`
+reads any result in full: a PDF as its pages in order (`page_from` / `page_to`), any
+other document as one text.
+
+## Searching a period
+
+`date_from` and `date_to` (`YYYY-MM-DD`, both included, either one can be left out)
+keep only the documents dated in that period (`creation_date`). They combine with
+every other option, `fresh_bias` included.
 
 ## Search operators
 

@@ -30,8 +30,12 @@ from . import __version__
 from .client import (
     OpensolrClient,
     OpensolrError,
+    add_filters,
     apply_fresh_bias,
     apply_search_operators,
+    date_range_filter,
+    list_files,
+    page_info,
     parse_operators,
     resolve_location,
 )
@@ -44,10 +48,14 @@ mcp = MCPServer(
     version=__version__,
     instructions=(
         "Managed Apache Solr search for the user's Opensolr account. "
-        "Use opensolr_search for retrieval (hybrid keyword+semantic by default), "
-        "opensolr_ai_answer for a grounded RAG answer, and the document tools "
-        "to index or remove content. Embedding happens server-side — tools "
-        "accept plain text, never vectors."
+        "Use opensolr_search for retrieval (hybrid keyword+semantic by default; a PDF "
+        "comes back as its best page, with the page number and a link to it), "
+        "opensolr_read_document to read a hit in full, opensolr_ai_answer for a grounded "
+        "RAG answer, opensolr_index_files to index local files and folders (PDFs page by "
+        "page, scans through OCR), opensolr_extract_text to read local files without "
+        "indexing them, opensolr_describe_image for what a picture shows and the text on "
+        "it, and the document tools to index or remove content. Embedding happens "
+        "server-side — tools accept plain text, never vectors."
     ),
 )
 
@@ -79,8 +87,9 @@ _META_KEY_RE = re.compile(r"[^a-z0-9_]+")
 _HYBRID_MODES = ("union", "keywords_required", "meaning_required", "intersection")
 
 
-def _doc_out(solr_doc: Dict[str, Any]) -> Dict[str, Any]:
-    """Shape a Solr doc for LLM consumption: id, title, text, score, metadata."""
+def _doc_out(solr_doc: Dict[str, Any], expanded: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Shape a Solr doc for LLM consumption: id, title, text, score, metadata, and where it
+    lives (uri; for a page of a PDF the page, its link and the other matching pages)."""
 
     def _flat(v: Any) -> Any:
         if isinstance(v, list):
@@ -103,6 +112,7 @@ def _doc_out(solr_doc: Dict[str, Any]) -> Dict[str, Any]:
         "text": str(text)[:2000],
         "score": float(_flat(solr_doc.get("score", 0.0)) or 0.0),
         "metadata": metadata,
+        **page_info(solr_doc, expanded),
     }
 
 
@@ -116,6 +126,9 @@ def opensolr_search(
     alpha: float = 0.5,
     filter_query: Optional[str] = None,
     fresh_bias: bool = False,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    group_pages: bool = True,
 ) -> List[Dict[str, Any]]:
     """Search an Opensolr index and return the k most relevant documents.
 
@@ -130,9 +143,17 @@ def opensolr_search(
     the hit count is unchanged, nothing old becomes unreachable, and a document
     with no creation_date is simply left unboosted. Works in all three search
     modes. Off by default — turn it on when newer should beat older on a tie.
+    date_from / date_to (YYYY-MM-DD, both included, either may be left out) keep
+    only documents dated in that period (creation_date) — use them when the
+    question names a period.
+    A PDF indexed page by page is one result per PDF (group_pages, on by default):
+    its best page, with "page", "page_url" (opens the PDF at that page),
+    "document_id" (for opensolr_read_document) and "more_pages", its other
+    matching pages. Every result has its "uri".
     """
     client = _get_client()
-    return _do_search(client, index, query, k, search_mode, mode, alpha, filter_query, fresh_bias)
+    return _do_search(client, index, query, k, search_mode, mode, alpha, filter_query, fresh_bias,
+                      date_from, date_to, group_pages)
 
 
 def _do_search(
@@ -145,9 +166,14 @@ def _do_search(
     alpha: float,
     filter_query: Optional[str],
     fresh_bias: bool,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    group_pages: bool = True,
 ) -> List[Dict[str, Any]]:
     """Shared search body used by opensolr_search and opensolr_search_by_image."""
     params: Dict[str, Any] = {"rows": k, "fl": "*,score"}
+    # Checked before anything is embedded: a malformed date is the caller's, not a GPU call's
+    period = date_range_filter(date_from, date_to)
     # Search operators (+word, -word, +"phrase", -"phrase") come out of the text once, for
     # every mode below. See parse_operators() for why they cannot stay inside the query on
     # any path that involves a vector — an agent that types "-Ruben" currently gets MORE
@@ -189,18 +215,11 @@ def _do_search(
         apply_search_operators(params, ops)
     if fresh_bias:
         apply_fresh_bias(params)
-    if filter_query:
-        # Append: the operator filters and the Fresh Results Bias date clause are already in
-        # params by now, and a plain assignment would drop both.
-        existing = params.get("fq")
-        if existing is None:
-            params["fq"] = filter_query
-        elif isinstance(existing, list):
-            params["fq"] = existing + [filter_query]
-        else:
-            params["fq"] = [existing, filter_query]
-    body = client.solr_select(index, params)
-    return [_doc_out(d) for d in body["response"]["docs"]]
+    # Appended: the operator filters and the Fresh Results Bias date clause are already in params
+    add_filters(params, filter_query, period)
+    body = client.select_grouped(index, params, group_pages)
+    expanded = body.get("expanded") or {}
+    return [_doc_out(d, expanded) for d in body["response"]["docs"]]
 
 
 @mcp.tool()
@@ -214,6 +233,9 @@ def opensolr_search_by_image(
     alpha: float = 0.5,
     filter_query: Optional[str] = None,
     fresh_bias: bool = False,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    group_pages: bool = True,
 ) -> Dict[str, Any]:
     """Search an Opensolr index with a PHOTO instead of a text query.
 
@@ -229,8 +251,8 @@ def opensolr_search_by_image(
       "text"    only the OCR text read off the picture (empty if none),
       "code"    the first barcode / QR code, matched as an exact keyword.
 
-    search_mode / mode / alpha / fresh_bias / filter_query behave exactly as in
-    opensolr_search. Returns {"read": {text, mode, labels, codes}, "results": [...]}
+    search_mode / mode / alpha / fresh_bias / filter_query / date_from / date_to /
+    group_pages behave exactly as in opensolr_search. Returns {"read": {text, mode, labels, codes}, "results": [...]}
     so the caller sees both what the picture was read as and the matching documents.
     """
     client = _get_client()
@@ -263,7 +285,8 @@ def opensolr_search_by_image(
     else:
         raise ValueError("using must be one of 'auto', 'meaning', 'text', 'code', 'all'")
 
-    results = _do_search(client, index, q, k, search_mode, mode, alpha, filter_query, fresh_bias) if q else []
+    results = _do_search(client, index, q, k, search_mode, mode, alpha, filter_query, fresh_bias,
+                         date_from, date_to, group_pages) if q else []
     return {"read": read, "results": results}
 
 
@@ -304,6 +327,139 @@ def opensolr_ai_answer(
         rag_docs=rag_docs, rag_words=rag_words, instruction=instruction,
         tuning=tuning,
     )
+
+
+@mcp.tool()
+def opensolr_read_document(
+    index: str,
+    document: str,
+    page_from: int = 1,
+    page_to: Optional[int] = None,
+    max_chars: int = 60000,
+) -> Dict[str, Any]:
+    """Read one indexed document in full — search results carry only an excerpt.
+
+    document is the "document_id" or "id" of a search result, the id it was sent
+    with, or its URL. A PDF indexed page by page comes back as its pages in order
+    (page_from to page_to, default the first 50; "pages_indexed" tells how many it
+    has) — read the next ones with page_from. Any other document comes back as one
+    text. The answer is cut at max_chars characters ("truncated": true).
+    """
+    first = max(1, int(page_from or 1))
+    out = _get_client().read_document(index, document, page_from=first, page_to=page_to or first + 49)
+    left = max(1000, int(max_chars or 60000))
+    if "pages" in out:
+        kept = []
+        for p in out["pages"]:
+            if left <= 0:
+                out["truncated"] = True
+                break
+            if len(p["text"]) > left:
+                p = {**p, "text": p["text"][:left]}
+                out["truncated"] = True
+            left -= len(p["text"])
+            kept.append(p)
+        out["pages"] = kept
+        if kept:
+            out["page_to"] = kept[-1]["page"]
+    elif len(out.get("text", "")) > left:
+        out["text"] = out["text"][:left]
+        out["truncated"] = True
+    return out
+
+
+@mcp.tool()
+def opensolr_extract_text(
+    index: str,
+    path: str,
+    pattern: str = "*",
+    recursive: bool = True,
+    wait_seconds: int = 60,
+    max_chars: int = 60000,
+) -> Dict[str, Any]:
+    """Read local files on Opensolr without indexing them: their text, the text in
+    their pictures (OCR, 100+ languages), a PDF page by page, scanned pages and
+    picture files (JPG, PNG, TIFF...) included.
+
+    path is a file or a folder (pattern filters the files of a folder, e.g. "*.pdf";
+    recursive walks its sub-folders). index is the Opensolr index the work is counted
+    on (pictures read: 0.5 AI request each; a file read before is free). Files still
+    being read after wait_seconds come back with state "queued"/"processing": call
+    again with the same path to get them — they are not sent twice. Each file:
+    path, state, mime and its "pages" (a PDF: page, text, is_ocr, lang) or "text";
+    "error" when it could not be read. The whole answer is cut at max_chars characters.
+    """
+    client = _get_client()
+    files = list_files(path, pattern, recursive)
+    if not files:
+        return {"files": [], "note": "No files matched."}
+    entries = client.extract_files(index, files, pages=True, timeout=max(0, int(wait_seconds)))
+    left = max(1000, int(max_chars or 60000))
+    out = []
+    for e in entries:
+        item = {k: e[k] for k in ("path", "state", "mime", "error") if k in e}
+        if "pages" in e:
+            pages = []
+            for p in e["pages"]:
+                text = str(p.get("text") or "")
+                if left <= 0:
+                    item["truncated"] = True
+                    break
+                if len(text) > left:
+                    item["truncated"] = True
+                pages.append({"page": p.get("page"), "is_ocr": bool(p.get("is_ocr")), "lang": p.get("lang") or "",
+                              "text": text[:left]})
+                left -= min(len(text), left)
+            item["pages"] = pages
+        elif "text" in e:
+            text = str(e["text"] or "")
+            item["text"] = text[:max(0, left)]
+            if len(text) > left:
+                item["truncated"] = True
+            left -= min(len(text), left)
+        out.append(item)
+    return {"files": out}
+
+
+@mcp.tool()
+def opensolr_index_files(
+    index: str,
+    path: str,
+    pattern: str = "*",
+    recursive: bool = True,
+    metadata: Optional[Dict[str, Any]] = None,
+    wait_seconds: int = 60,
+) -> Dict[str, Any]:
+    """Index local files into an Opensolr index: one file or a whole folder.
+
+    Each file is read on Opensolr — its text, the text in its pictures (OCR), the
+    pictures without text described — and a PDF is indexed ONE DOCUMENT PER PAGE,
+    so a search finds the page that answers it (results carry the page number and
+    a link to it). Word, RTF, OpenDocument, text, HTML and picture files (scans)
+    are one document each. pattern filters the files of a folder (e.g. "*.pdf"),
+    recursive walks its sub-folders, metadata is added to every document as
+    filterable meta_* fields. Sending the same files again replaces them.
+
+    Files still being read after wait_seconds come back under "pending": call
+    again with the same path to index them (the bytes are not sent twice).
+    Returns "documents" (path, source, uri, id), "pending", "failed" and "jobs"
+    (Data Ingestion job ids, see opensolr_ingest_status); documents become
+    searchable about a minute after their job runs.
+    """
+    return _get_client().ingest_files(index, path, pattern=pattern, recursive=recursive,
+                                      metadata=metadata, wait=False, timeout=max(0, int(wait_seconds)))
+
+
+@mcp.tool()
+def opensolr_describe_image(index: str, image_path: str) -> Dict[str, Any]:
+    """What a picture shows and what is written on it: "caption" (a sentence about
+    what it depicts), "text" (the text read off it by OCR, empty if none),
+    "labels" (the things in it) and "codes" (barcodes / QR codes). index is the
+    Opensolr index the reading is counted on. Nothing is stored.
+    """
+    with open(os.path.expanduser(image_path), "rb") as fh:
+        image_b64 = base64.b64encode(fh.read()).decode("ascii")
+    return _get_client().describe_image(index, image_b64)
 
 
 @mcp.tool()
